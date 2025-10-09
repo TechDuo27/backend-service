@@ -1,7 +1,7 @@
 from pathlib import Path
 from io import BytesIO
 import base64
-from typing import Optional
+from typing import Optional, Dict, List, Tuple, Any
 import numpy as np
 from PIL import Image
 import cv2
@@ -26,6 +26,7 @@ TARGET_CLASSES = {
     'Filling': (238, 130, 238),
     'Primary teeth': (0, 0, 128),
     'Retained root': (0, 128, 128),
+    'Mandibular Canal': (0, 255, 0),  # Added Mandibular Canal with green color
 }
 
 SPECIAL_COLORS = {
@@ -52,6 +53,7 @@ DISPLAY_NAMES = {
     'Filling': 'Restorations',
     'Primary teeth': 'Retained deciduous tooth',
     'Retained root': 'Root stump',
+    'Mandibular Canal': 'Mandibular Canal',  # Added Mandibular Canal display name
 }
 
 CLASS_NAMES_MODEL1 = {
@@ -82,7 +84,7 @@ CLASS_NAMES_MODEL2 = [
     "Zimmer Dental Implant"
 ]
 
-_models: dict[str, Optional[YOLO]] = {"m1": None, "m2": None}
+_models: dict[str, Optional[YOLO]] = {"m1": None, "m2": None, "mask": None}
 
 def load_models():
     base = Path(__file__).resolve().parent
@@ -90,7 +92,16 @@ def load_models():
         _models["m1"] = YOLO(str(base / "best.pt"))
     if _models["m2"] is None:
         _models["m2"] = YOLO(str(base / "best2.pt"))
-    return _models["m1"], _models["m2"]
+    if _models["mask"] is None:
+        _models["mask"] = YOLO(str(base / "best-mask.pt"))
+    return _models["m1"], _models["m2"], _models["mask"]
+
+def get_class_index(model: YOLO, class_name: str) -> Optional[int]:
+    """Get the class index for a given class name in the model."""
+    for k, v in model.names.items():
+        if v.strip().lower() == class_name.lower():
+            return k
+    return None
 
 def _pil_to_np(image: Image.Image) -> np.ndarray:
     return np.array(image.convert("RGB"))
@@ -108,14 +119,14 @@ def encode_image_np_to_base64(image_np: np.ndarray) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 def run_inference(image_np: np.ndarray):
-    model1, model2 = load_models()
+    model1, model2, mask_model = load_models()
     detection_info = []
 
     # model1
     results1 = model1(image_np)[0]
     for box in results1.boxes.cpu().numpy():
         cls = int(box.cls[0])
-        if cls == 8:
+        if cls == 8:  # Skip Mandibular Canal in model1 as we'll use the mask model for it
             continue
         name = CLASS_NAMES_MODEL1.get(cls, f"Unknown {cls}")
         conf = float(box.conf[0])
@@ -126,7 +137,9 @@ def run_inference(image_np: np.ndarray):
                 "confidence": conf,
                 "bbox": [int(v) for v in box.xyxy[0]],
                 "is_grossly_carious": False,
-                "is_internal_resorption": False
+                "is_internal_resorption": False,
+                "has_mask": False,
+                "mask_contours": None
             })
 
     # model2
@@ -155,8 +168,77 @@ def run_inference(image_np: np.ndarray):
                 "confidence": conf,
                 "bbox": [int(v) for v in box.xyxy[0]],
                 "is_grossly_carious": False,
-                "is_internal_resorption": False
+                "is_internal_resorption": False,
+                "has_mask": False,
+                "mask_contours": None
             })
+
+    # mask model for Mandibular Canal - use dedicated segmentation model
+    results_mask = mask_model(image_np)
+    mandibular_idx = get_class_index(mask_model, "Mandibular Canal")
+    
+    if mandibular_idx is not None:
+        # Check if we have masks in the results
+        if hasattr(results_mask[0], 'masks') and results_mask[0].masks is not None:
+            masks = results_mask[0].masks.data.cpu().numpy()
+            boxes = results_mask[0].boxes
+            img_h, img_w = image_np.shape[:2]
+            
+            for i, class_idx in enumerate(boxes.cls):
+                if int(class_idx) == mandibular_idx:
+                    conf = float(boxes.conf[i])
+                    # Get bounding box
+                    box = boxes.xyxy[i].cpu().numpy()
+                    bbox = [int(v) for v in box]
+                    
+                    # Process mask
+                    mask = masks[i]
+                    # Resize mask to match the original image dimensions
+                    mask_resized = cv2.resize(mask, (img_w, img_h), interpolation=cv2.INTER_NEAREST)
+                    # Convert to binary mask using threshold
+                    mask_binary = (mask_resized > 0.5).astype(np.uint8)
+                    
+                    # Find contours in the binary mask
+                    contours, _ = cv2.findContours(mask_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    
+                    # Convert contours to the format expected by our Pydantic models
+                    contours_serializable = []
+                    for j, contour in enumerate(contours):
+                        # Skip contours that are too small (likely noise)
+                        area = cv2.contourArea(contour)
+                        if area < 10:
+                            continue
+                        
+                        points = []
+                        # Reshape contour to get individual points
+                        contour_reshaped = contour.reshape(-1, 2)
+                        
+                        # Don't simplify too much - we want detailed contours
+                        epsilon = 0.001 * cv2.arcLength(contour, True)
+                        approx = cv2.approxPolyDP(contour, epsilon, True)
+                        approx_reshaped = approx.reshape(-1, 2)
+                        
+                        for point in approx_reshaped:
+                            x, y = int(point[0]), int(point[1])
+                            points.append({"x": x, "y": y})
+                        
+                        if len(points) > 0:  # Only add if we have points
+                            contours_serializable.append({"points": points})
+                    
+                    # Only add detection if we have valid contours
+                    if contours_serializable:
+                        detection_info.append({
+                            "class": "Mandibular Canal",
+                            "display_name": "Mandibular Canal",
+                            "confidence": conf,
+                            "bbox": bbox,
+                            "is_grossly_carious": False,
+                            "is_internal_resorption": False,
+                            "has_mask": True,
+                            "mask_contours": contours_serializable
+                        })
+        else:
+            pass
 
     # postprocessing
     processed = []
@@ -186,13 +268,50 @@ def draw_annotations(image_np: np.ndarray, detections):
     for d in detections:
         out.append(d)
         x1, y1, x2, y2 = d["bbox"]
+        
         if d.get("is_grossly_carious"):
             color = SPECIAL_COLORS["Grossly carious"]
         elif d.get("is_internal_resorption"):
             color = SPECIAL_COLORS["Internal resorption"]
         else:
             color = TARGET_CLASSES.get(d["class"], (0, 255, 0))
-        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+        
+        # For segmentation-based detections, prioritize drawing the mask
+        if d.get("has_mask") and d.get("mask_contours"):
+            # Skip drawing the bounding box entirely for segmentation-based detections
+            
+            # Create a separate overlay for the mask
+            overlay = img.copy()
+            mask_overlay = np.zeros_like(img)
+            
+            # Convert contours from our structured format back to numpy arrays
+            contours = []
+            for contour_obj in d["mask_contours"]:
+                points = []
+                for point in contour_obj["points"]:
+                    points.append([point["x"], point["y"]])
+                contour_array = np.array(points, dtype=np.int32)
+                contours.append(contour_array)
+            
+            # Create a binary mask from contours
+            mask = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8)
+            cv2.drawContours(mask, contours, -1, 255, thickness=-1)  # Filled contour
+            
+            # Apply color to the mask
+            colored_mask = np.zeros_like(img)
+            colored_mask[mask > 0] = color
+            
+            # Draw the mask on the image with transparency
+            alpha = 0.4  # Transparency factor
+            mask_indices = mask > 0
+            img[mask_indices] = cv2.addWeighted(img[mask_indices], 0.6, colored_mask[mask_indices], 0.4, 0)
+            
+            # Draw contour outlines on the main image
+            cv2.drawContours(img, contours, -1, color, thickness=3)
+        else:
+            # For regular detections, just draw the bounding box
+            cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+    
     return img, out
 
 def generate_report_html(detections, annotated_pil: Image.Image):
@@ -200,20 +319,95 @@ def generate_report_html(detections, annotated_pil: Image.Image):
     annotated_pil.save(buf, format="PNG")
     img_str = base64.b64encode(buf.getvalue()).decode()
     items = []
+    
+    # Group detections by type (segmentation vs bounding box)
+    segmentation_detections = []
+    bbox_detections = []
+    
     for det in detections:
-        if det.get("is_grossly_carious"):
-            color = SPECIAL_COLORS["Grossly carious"]
-        elif det.get("is_internal_resorption"):
-            color = SPECIAL_COLORS["Internal resorption"]
+        if det.get("has_mask"):
+            segmentation_detections.append(det)
         else:
+            bbox_detections.append(det)
+    
+    # Add CSS for styling
+    css = """
+    <style>
+        .detection-list {
+            list-style-type: none;
+            padding: 0;
+            margin: 20px 0;
+        }
+        .detection-item {
+            padding: 10px;
+            margin-bottom: 8px;
+            border-radius: 4px;
+        }
+        .segmentation-item {
+            background-color: rgba(0, 255, 0, 0.1);
+            border-left: 5px solid rgb(0, 255, 0);
+        }
+        .bbox-item {
+            border-left: 5px solid;
+            background-color: rgba(200, 200, 200, 0.1);
+        }
+        .section-title {
+            margin-top: 20px;
+            font-weight: bold;
+        }
+        .confidence {
+            font-weight: bold;
+        }
+    </style>
+    """
+    
+    # Process segmentation detections
+    if segmentation_detections:
+        items.append('<h3 class="section-title">Segmentation Detections</h3>')
+        items.append('<ul class="detection-list">')
+        for det in segmentation_detections:
             color = TARGET_CLASSES.get(det["class"], (0, 255, 0))
-        rgb = f"rgb({color[0]}, {color[1]}, {color[2]})"
-        items.append(f'<li style="border-left:5px solid {rgb};padding-left:10px;">{det["display_name"]} - <b>Confidence: {det["confidence"]:.1%}</b></li>')
-    html = f"""<html><head><title>Dental AI Report</title></head><body>
-    <h1>Dental AI Report</h1>
-    <img src="data:image/png;base64,{img_str}" style="max-width:100%"/>
-    <ul>{''.join(items) if items else "<li>None Detected</li>"}</ul>
-    </body></html>"""
+            rgb = f"rgb({color[0]}, {color[1]}, {color[2]})"
+            items.append(f'<li class="detection-item segmentation-item" style="border-left-color:{rgb};">')
+            items.append(f'<div>{det["display_name"]} - <span class="confidence">Confidence: {det["confidence"]:.1%}</span></div>')
+            
+            # Add contour information
+            if det.get("mask_contours"):
+                num_contours = len(det["mask_contours"])
+                total_points = sum(len(c["points"]) for c in det["mask_contours"])
+                items.append(f'<div><small>Segmentation: {num_contours} contours, {total_points} points</small></div>')
+            
+            items.append('</li>')
+        items.append('</ul>')
+    
+    # Process bounding box detections
+    if bbox_detections:
+        items.append('<h3 class="section-title">Bounding Box Detections</h3>')
+        items.append('<ul class="detection-list">')
+        for det in bbox_detections:
+            if det.get("is_grossly_carious"):
+                color = SPECIAL_COLORS["Grossly carious"]
+            elif det.get("is_internal_resorption"):
+                color = SPECIAL_COLORS["Internal resorption"]
+            else:
+                color = TARGET_CLASSES.get(det["class"], (0, 255, 0))
+            rgb = f"rgb({color[0]}, {color[1]}, {color[2]})"
+            items.append(f'<li class="detection-item bbox-item" style="border-left-color:{rgb};">')
+            items.append(f'<div>{det["display_name"]} - <span class="confidence">Confidence: {det["confidence"]:.1%}</span></div>')
+            items.append('</li>')
+        items.append('</ul>')
+    
+    html = f"""<html>
+    <head>
+        <title>Dental AI Report</title>
+        {css}
+    </head>
+    <body>
+        <h1>Dental AI Report</h1>
+        <img src="data:image/png;base64,{img_str}" style="max-width:100%"/>
+        {''.join(items) if items else "<p>No detections found</p>"}
+    </body>
+    </html>"""
     return html
 
 # expose helper
