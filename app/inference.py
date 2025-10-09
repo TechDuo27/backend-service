@@ -86,14 +86,20 @@ CLASS_NAMES_MODEL2 = [
 
 _models: dict[str, Optional[YOLO]] = {"m1": None, "m2": None, "mask": None}
 
+import logging
+
 def load_models():
     base = Path(__file__).resolve().parent
-    if _models["m1"] is None:
-        _models["m1"] = YOLO(str(base / "best.pt"))
-    if _models["m2"] is None:
-        _models["m2"] = YOLO(str(base / "best2.pt"))
-    if _models["mask"] is None:
-        _models["mask"] = YOLO(str(base / "best-mask.pt"))
+    try:
+        if _models["m1"] is None:
+            _models["m1"] = YOLO(str(base / "best.pt"))
+        if _models["m2"] is None:
+            _models["m2"] = YOLO(str(base / "best2.pt"))
+        if _models["mask"] is None:
+            _models["mask"] = YOLO(str(base / "best-mask.pt"))
+    except Exception as e:
+        logging.error(f"Error loading models: {e}")
+        raise
     return _models["m1"], _models["m2"], _models["mask"]
 
 def get_class_index(model: YOLO, class_name: str) -> Optional[int]:

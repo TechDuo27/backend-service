@@ -75,6 +75,7 @@ async def analyze(file: UploadFile = File(...)):
         )
         payload.append(detection)
     h, w = img_np.shape[:2]
+    return AnalyzeResponse(width=w, height=h, detections=payload, annotated_image_base64_png=annotated_b64)
 
 @app.post("/report", response_model=ReportResponse)
 async def report(file: UploadFile = File(...)):
