@@ -1,3 +1,14 @@
+import os
+
+os.environ["YOLO_OFFLINE"] = "True"
+os.environ["ULTRALYTICS_OFFLINE"] = "True"
+os.environ["ULTRALYTICS_HUB"] = "False"
+os.environ["ULTRALYTICS_API_KEY"] = ""
+os.environ["ULTRALYTICS_SYNC"] = "False"
+os.environ["ULTRALYTICS_CHECK"] = "False"
+
+print(">>>> Ultralytics forced into OFFLINE mode <<<<")
+
 from pathlib import Path
 from io import BytesIO
 import base64
@@ -5,12 +16,11 @@ from typing import Optional, Dict, List, Any
 import numpy as np
 from PIL import Image
 import cv2
-from ultralytics import YOLO
+
+from ultralytics import YOLO  
+
 import logging
-import os
 import datetime
-
-
 
 CLASS_DESCRIPTIONS = {
     'SUPERNUMERARY TEETH': 'Supernumerary teeth are teeth that develop in addition to the normal number of teeth. They may occur in the primary or permanent dentition, can be single or multiple, unilateral or bilateral and may appear in any region of the dental arch.',
