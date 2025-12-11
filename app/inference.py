@@ -11,6 +11,22 @@ import os
 import datetime
 
 
+# Disable ALL ultralytics online behavior
+import os
+os.environ["ULTRALYTICS_HUB"] = "False"
+os.environ["ULTRALYTICS_CHECKS"] = "False"
+os.environ["ULTRALYTICS_SYNC"] = "False"
+
+import ultralytics
+ultralytics.settings.update({
+    "checks": False,
+    "hub": False,
+    "sync": False
+})
+
+from ultralytics import YOLO
+
+
 CLASS_DESCRIPTIONS = {
     'SUPERNUMERARY TEETH': 'Supernumerary teeth are teeth that develop in addition to the normal number of teeth. They may occur in the primary or permanent dentition, can be single or multiple, unilateral or bilateral and may appear in any region of the dental arch.',
     'GROSSLY DECAYED': 'Grossly decayed tooth is a tooth in which dental caries has progressed extensively, leading to the destruction of a large portion of the tooth structure, often involving both enamel and dentin and in many cases extending close to or into the pulp.',
