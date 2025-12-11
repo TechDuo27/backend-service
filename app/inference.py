@@ -11,11 +11,6 @@ import os
 import datetime
 
 
-os.environ["ULTRALYTICS_NO_CHECKS"] = "1"
-os.environ["ULTRALYTICS_HUB"] = "False"
-os.environ["ULTRALYTICS_API_KEY"] = ""
-os.environ["YOLO_VERBOSE"] = "False"
-
 
 CLASS_DESCRIPTIONS = {
     'SUPERNUMERARY TEETH': 'Supernumerary teeth are teeth that develop in addition to the normal number of teeth. They may occur in the primary or permanent dentition, can be single or multiple, unilateral or bilateral and may appear in any region of the dental arch.',
