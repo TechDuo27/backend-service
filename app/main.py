@@ -69,6 +69,10 @@ class AnalyzeResponse(BaseModel):
 # Health
 # ============================================================
 
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
 @app.get("/health")
 async def health_check() -> Dict[str, str]:
     return {"status": "healthy", "message": "Backend is running"}
