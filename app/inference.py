@@ -11,20 +11,10 @@ import os
 import datetime
 
 
-# Disable ALL ultralytics online behavior
-import os
+os.environ["ULTRALYTICS_NO_CHECKS"] = "1"
 os.environ["ULTRALYTICS_HUB"] = "False"
-os.environ["ULTRALYTICS_CHECKS"] = "False"
-os.environ["ULTRALYTICS_SYNC"] = "False"
-
-import ultralytics
-ultralytics.settings.update({
-    "checks": False,
-    "hub": False,
-    "sync": False
-})
-
-from ultralytics import YOLO
+os.environ["ULTRALYTICS_API_KEY"] = ""
+os.environ["YOLO_VERBOSE"] = "False"
 
 
 CLASS_DESCRIPTIONS = {
